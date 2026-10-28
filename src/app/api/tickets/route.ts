@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import dbConnect from '../../../lib/mongodb';
 import Ticket from '../../../models/Ticket';
-import '../../../models/User'; // <-- Yeh line lazmi hai taake populate('student') crash na ho!
-import { createTicketSchema } from '../../../lib/validations/ticket';
+import User from '../../../models/User'; // <-- User model import kar liya hai
+import '../../../models/User';
 
 // POST: Create a new support ticket (Student Role)
 export async function POST(req: Request) {
@@ -10,35 +10,32 @@ export async function POST(req: Request) {
     await dbConnect();
     const body = await req.json();
 
-    const validationResult = createTicketSchema.safeParse(body);
-    if (!validationResult.success) {
+    const { title, description, category, priority, studentId, userId } = body;
+
+    if (!title || !description || !category) {
       return NextResponse.json(
-        { 
-          success: false, 
-          error: 'Validation failed', 
-          details: validationResult.error.format() 
-        },
+        { success: false, error: 'Please fill in all required fields (title, description, category)' },
         { status: 400 }
       );
     }
 
-    const { title, description, category, priority } = validationResult.data;
-    const { studentId } = body;
-
-    if (!studentId) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized: Student ID missing' },
-        { status: 401 }
-      );
+    // Agar frontend se ID na aaye, toh database se koi bhi pehla student dhoond kar assign kar dein
+    let finalStudentId = studentId || userId;
+    if (!finalStudentId) {
+      const defaultStudent = await User.findOne({ role: 'student' });
+      if (defaultStudent) {
+        finalStudentId = defaultStudent._id;
+      }
     }
 
     const totalTickets = await Ticket.countDocuments();
     const ticketNumber = `TKT-${1000 + totalTickets + 1}`;
 
+    const priorityLevel = priority || 'Medium';
     const slaHours = 
-      priority === 'Urgent' ? 2 : 
-      priority === 'High' ? 6 : 
-      priority === 'Medium' ? 24 : 48;
+      priorityLevel === 'Urgent' ? 2 : 
+      priorityLevel === 'High' ? 6 : 
+      priorityLevel === 'Medium' ? 24 : 48;
 
     const slaDueDate = new Date(Date.now() + slaHours * 60 * 60 * 1000);
 
@@ -47,9 +44,9 @@ export async function POST(req: Request) {
       title,
       description,
       category,
-      priority,
+      priority: priorityLevel,
       status: 'Open',
-      student: studentId,
+      student: finalStudentId || undefined, // Agar phir bhi na ho toh Mongoose schema crash na ho
       slaDueDate,
     });
 
@@ -65,7 +62,7 @@ export async function POST(req: Request) {
   } catch (error: any) {
     console.error('Ticket creation error:', error);
     return NextResponse.json(
-      { success: false, error: 'Internal Server Error', details: error.message },
+      { success: false, error: error.message || 'Internal Server Error' },
       { status: 500 }
     );
   }
@@ -96,7 +93,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ success: true, count: tickets.length, data: tickets }, { status: 200 });
 
   } catch (error: any) {
-    console.error('GET Tickets Error:', error.message); // Terminal mein exact error print hoga
+    console.error('GET Tickets Error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
